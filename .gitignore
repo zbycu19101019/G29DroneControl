@@ -1,0 +1,30 @@
+# Generated Windows / Android output and local tooling
+build/
+dist/
+**/build/
+**/.gradle/
+.venv/
+venv/
+**/__pycache__/
+*.py[cod]
+*.spec
+*.exe
+*.apk
+*.aab
+*.zip
+*.log
+self-test.json
+.idea/
+.vscode/
+
+# Credentials, personal device settings, SDK caches
+android/local.properties
+**/dji-private.properties
+**/secrets.properties
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
+config.local.json
+calibration*.json

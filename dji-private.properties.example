@@ -1,0 +1,4 @@
+# Example only. Copy outside version control and point DJI_KEYS_FILE to it.
+# Register your own DJI Mobile SDK Android application for:
+# com.example.g29dronecontrol
+djiAppKey=YOUR_24_CHARACTER_DJI_ANDROID_APP_KEY

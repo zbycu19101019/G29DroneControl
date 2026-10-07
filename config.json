@@ -1,0 +1,35 @@
+{
+  "updateRate": 40,
+  "deadzone": 0.05,
+  "steeringSensitivity": 0.6,
+  "axisSensitivity": {
+    "steering": 1.0,
+    "throttle": 1.0,
+    "brake": 1.0,
+    "clutch": 1.0
+  },
+  "axisMap": {
+    "steering": 0,
+    "throttle": 1,
+    "brake": 2,
+    "clutch": 3
+  },
+  "axisInverted": {
+    "steering": false,
+    "throttle": false,
+    "brake": false,
+    "clutch": false
+  },
+  "outputLimit": 0.6,
+  "pitchSensitivity": 0.7,
+  "rollSensitivity": 0.5,
+  "verticalSensitivity": 0.5,
+  "pedalRestRaw": {"throttle": 1.0, "brake": 1.0, "clutch": 1.0},
+  "pedalPressedRaw": {"throttle": -1.0, "brake": -1.0, "clutch": -1.0},
+  "transportPort": 8765,
+  "profile": "NORMAL",
+  "buttonMap": {
+    "paddle_left": 4,
+    "paddle_right": 5
+  }
+}
