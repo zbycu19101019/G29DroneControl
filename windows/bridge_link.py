@@ -3,15 +3,22 @@ from __future__ import annotations
 
 import json
 import select
+import secrets
 import socket
 import time
 import uuid
 from typing import Any
+from windows.signed_frames import VERSION, decode_signed, encode_signed, pairing_code
 
 
 class JsonLineServer:
     def __init__(self, host: str = "127.0.0.1", port: int = 8765):
+        if host != "127.0.0.1" or type(port) is not int or not 0 <= port <= 65535:
+            raise ValueError("Mostek może nasłuchiwać tylko na IPv4 localhost")
         self.host, self.port = host, port
+        self.pairing_token = secrets.token_hex(32)
+        self.pairing_code = pairing_code(self.pairing_token)
+        self.client_nonce = ""
         self.server = None
         self.client = None
         self.session = ""
@@ -56,6 +63,7 @@ class JsonLineServer:
         self.buffer.clear()
         self.last_ack = 0.0
         self.remote = {}
+        self.client_nonce = ""
         self.reason = reason
 
     def accept_once(self) -> bool:
@@ -67,6 +75,9 @@ class JsonLineServer:
             return False
         except OSError:
             self.reason = "błąd przyjmowania TCP"
+            return False
+        if self.client is not None:
+            sock.close()  # A second local process must not replace an active session.
             return False
         self.disconnect("nowa sesja")
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -95,11 +106,21 @@ class JsonLineServer:
                 while b"\n" in self.buffer:
                     line, _, rest = self.buffer.partition(b"\n")
                     self.buffer = bytearray(rest)
-                    ack = json.loads(line)
-                    if ack.get("type") != "ack" or ack.get("version") != 1 or ack.get("sessionId") != self.session:
+                    ack = decode_signed(line, self.pairing_token)
+                    if not self.client_nonce:
+                        nonce = ack.get("clientNonce")
+                        if ack.get("type") != "hello" or type(ack.get("version")) is not int or ack["version"] != VERSION or not isinstance(nonce, str) or len(nonce) != 32 or any(c not in "0123456789abcdef" for c in nonce):
+                            raise ValueError("Nieprawidłowe uwierzytelnienie telefonu")
+                        self.client_nonce = nonce
+                        continue
+                    if (ack.get("type") != "ack" or type(ack.get("version")) is not int or ack["version"] != VERSION
+                            or ack.get("sessionId") != self.session or ack.get("clientNonce") != self.client_nonce
+                            or ack.get("flightControl") is not False):
                         raise ValueError("niezgodny protokół ACK")
                     seq = ack.get("seq")
-                    if not isinstance(seq, int) or seq not in self.pending:
+                    if type(seq) is not int:
+                        raise ValueError("Nieprawidłowa sekwencja ACK")
+                    if seq not in self.pending:
                         continue
                     now = time.monotonic()
                     rtt = (now - self.pending.pop(seq)) * 1000
@@ -114,17 +135,19 @@ class JsonLineServer:
                     self.remote = ack
             if time.monotonic() - (self.last_ack or self.accepted_at) > 0.3:
                 self.disconnect("watchdog ACK 300 ms: wyjście neutralne")
-        except (OSError, ValueError, TypeError, AttributeError):
+        except (OSError, ValueError, TypeError, AttributeError, RecursionError):
             self.disconnect("błąd odpowiedzi Androida")
 
     def send(self, packet: dict[str, Any]) -> bool:
-        if not self.client:
+        if not self.client or not self.client_nonce:
             return False
-        frame = dict(packet, version=1, sessionId=self.session, type="control")
+        frame = dict(packet, version=VERSION, sessionId=self.session, clientNonce=self.client_nonce, type="control")
         frame.setdefault("inputConnected", False)
         frame.setdefault("emergency", False)
         try:
-            payload = (json.dumps(frame, separators=(",", ":"), allow_nan=False) + "\n").encode()
+            payload = encode_signed(frame, self.pairing_token)
+            if len(payload) > 8192:
+                raise ValueError("Za duży pakiet")
             self.client.sendall(payload)
             self.pending[frame["seq"]] = time.monotonic()
             if len(self.pending) > 64:

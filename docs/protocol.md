@@ -1,15 +1,29 @@
-# Protokół V1 / kokpit V4
+# Protokół v2 — Windows V5 / Android 0.6
 
-TCP na 127.0.0.1 po stronie PC, klient Android 127.0.0.1 przez `adb reverse tcp:8765 tcp:8765`. Każda linia UTF-8 kończy się LF i zawiera jeden obiekt JSON. Android ogranicza ramkę do 8192 bajtów. To kanał PC ↔ telefon, nie protokół DJI i nie potwierdzenie poleceń przyjętych przez drona.
+To kanał diagnostyczny PC ↔ telefon, nie protokół DJI i nie potwierdzenie poleceń przyjętych przez drona. Serwer PC nasłuchuje wyłącznie na IPv4 127.0.0.1; Android łączy się z 127.0.0.1 przez autoryzowany adb reverse. Brak kompatybilności/fallbacku do v1.
 
-Pakiet PC zawiera `version:1`, `type:"control"`, `sessionId` (32 małe znaki hex), `seq` (rosnąca liczba całkowita), `timestampMs`, `inputConnected` (boolean), `emergency` (boolean), `heartbeat:true` i `output` z czterema wymaganymi skończonymi liczbami `yaw`, `pitch`, `roll`, `vertical` w zakresie [-1,1]. Telefon uznaje wejście za aktywne tylko przy inputConnected=true i emergency=false. Kanały są wyłącznie stanem testowym; NIE wywołują API lotu.
+## Zatwierdzenie i koperta
 
-Android potwierdza pakiet `version:1`, `type:"ack"`, ta sama `sessionId` i `seq`, `state:"NEUTRAL"` lub `"RECEIVING"`, `mode:"MOCK_ONLY"` albo `"DJI_SDK_READ_ONLY"`, `flightControl:false`, `aircraftTelemetry` (świeży callback lotu), `usb` (deskryptory) oraz opcjonalne `dji`.
+Windows tworzy losowy klucz 32 B (64 małe znaki hex) dla instancji mostka. ADB Intent przekazuje wyłącznie propozycję token/port. Telefon wymaga porównania kodu: pierwsze 8 uppercase hex SHA256 surowego klucza, oraz ręcznego potwierdzenia. connect=true nie uruchamia połączenia, SDK ani odczytu.
 
-`dji` zawiera registration, connection, model, productConnected, rcConnected, flightControllerConnected, telemetryFresh, telemetryAgeMs, batteryFresh, batteryAgeMs, telemetry, battery, validation i error. Bez aktualnych callbacków telemetry/battery są null. Rejestracja REGISTERED nie oznacza wsparcia Mini 2 SE. Znaczniki `officialMini2SeSupport:false`, `flightControl:false` i validation obowiązują również wtedy, gdy SDK zwraca częściowe dane. Callbacki są do sprawdzenia na fizycznym dronie.
+Każda linia LF ma kopertę JSON z dokładnie version:2, payload (tekst wewnętrznego JSON) oraz mac (64 małe znaki hex HMAC-SHA256 UTF-8 payload). Podpis sprawdzany przed parsowaniem danych, constant-time. HMAC to uwierzytelnienie, NIE szyfrowanie. Klucz nie jest zapisywany w config. Zaufany administrator/debugger/host ADB pozostaje poza tą granicą ochrony.
 
-Telemetria: kąty pitch/roll/yaw w stopniach, wysokość altitudeM w metrach, prędkości velocityXMps/velocityYMps/velocityZMps w m/s w układzie SDK, liczba satellites, flightMode, flying i motorsOn. GPS latitude/longitude pojawia się tylko przy poprawnym zakresie i co najmniej czterech satelitach; nadal wymaga weryfikacji. SDK nie jest przemapowywane na symulowaną mapę/horyzont. Bateria: percent i temperatureC. Brak pola oznacza brak odczytu, a nie zero.
+Telefon wysyła podpisane hello z version:2, type:hello i losowym clientNonce (32 hex). PC przypisuje nową sessionId (32 hex). Następne pakiety i ACK muszą odpowiadać obu wartościom. Drugie połączenie nie zastępuje już przyjętego klienta.
 
-Watchdog wejścia i ACK: 300 ms, zegar monotoniczny obu urządzeń niezależnie. EOF, błąd ramki, stara sekwencja, STOP i timeout zerują kanały mostka. PC przed pierwszym ACK wysyła zera i odrzuca spóźnione ACK. RTT mierzy obieg PC → Android → PC, nie pojedyncze opóźnienie ani stan radiowego łącza DJI.
+## Pakiety testowe i odpowiedzi
 
-Telemetria SDK jest świeża do 1500 ms od callbacku, bateria do 3000 ms. Windows dodatkowo sprawdza świeżość ACK i dodaje wiek ACK do wieku odczytu. STOP PC kończy kanał sterowania testowego, lecz pasywny odczyt SDK może działać dalej; oddzielny STOP odczytu na Androidzie kończy sesję DJI. W tym wariancie nie jest potrzebna neutralizacja prawdziwego drona, ponieważ aplikacja nigdy nie przejmuje sterowania lotem.
+PC: version:2, type:control, sessionId, clientNonce, rosnąca całkowita seq, timestampMs (informacyjny, nie zegar bezpieczeństwa), inputConnected i emergency (boolean), heartbeat:true, output z yaw/pitch/roll/vertical jako skończone liczby [-1,1]. Pierwszy pakiet musi być nieaktywny z zerami. Nieaktywny/emergency pakiet z niezerowym kanałem jest odrzucany. Aktywne kanały są tylko stanem testowym i nie wywołują API DJI.
+
+Android ACK: version:2, type:ack, ta sama sessionId/clientNonce/seq, state:NEUTRAL lub RECEIVING, mode:MOCK_ONLY lub DJI_SDK_READ_ONLY, flightControl:false, aircraftTelemetry, dji oraz usb. ACK nie nadawał i nie nadaje uprawnienia lotu. PC odrzuca nieznany protokół/podpis/sesję/nonce lub flightControl inne niż false. Tylko oczekiwany ACK odświeża watchdog; duplikaty go nie przedłużają.
+
+## Błędy i świeżość
+
+Limity: 8192 B ramki odbiorczej telefonu i wysyłanej przez PC; 32768 B bufora ACK na PC; payload podpisu do 16000 B; kolejka oczekujących ACK do 64. Watchdog pakietów i ACK: 300 ms zegara monotonicznego. RTT to czas obiegu PC→telefon→PC, nie opóźnienie radiowe drona. Nie jest to system czasu rzeczywistego.
+
+Nieprawidłowy podpis, zły nonce/sesja, stara sekwencja, EOF, timeout i STOP zerują testowy stan telefonu oraz zamykają sesję. Zdalny emergency STOP zatrzymuje również pasywny odczyt SDK. Sam błąd TCP/watchdog zamyka kanał testowy; nie udaje polecenia hamowania/lądowania. Ponowne połączenie telefonu tylko po ręcznym potwierdzeniu; utrata sesji Windows odznacza kanały G29.
+
+dji: registration, connection, model, productConnected, rcConnected, flightControllerConnected, telemetryFresh/telemetryAgeMs, batteryFresh/batteryAgeMs, telemetry/battery lub null, validation/error i usbPermission. Świeżość telemetrii ≤1500 ms wymaga READ_ONLY + produktu + FC; bateria ≤3000 ms wymaga READ_ONLY + produktu. Windows dolicza wiek ACK. Wszystkie częściowe callbacki są niezweryfikowane sprzętowo dla Mini 2 SE.
+
+Eksport lotu: pitch/roll/yaw, altitudeM, velocityXMps/velocityYMps/velocityZMps, satellites, flightMode, flying, motorsOn. GPS latitude/longitude usunięto ze względów prywatności. Bateria: percent, temperatureC. Świeża bateria ≤20% zatrzymuje kanały testowe, nie silniki. Źródłowe flagi officialMini2SeSupport:false i flightControl:false obowiązują zawsze.
+
+Przejście MainActivity w tło zatrzymuje odczyt SDK i oczekującą zgodę USB. Usługa mostka testowego jest foreground, non-exported, START_NOT_STICKY i ma powiadomienie STOP. Samo uruchomienie Activity / dołączenie USB niczego nie rejestruje ani nie łączy z DJI.

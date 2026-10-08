@@ -20,13 +20,13 @@ public final class DjiProbeApplication extends Application {
         super.onCreate();
         try {
             if (loadFailure != null) throw loadFailure;
-            SdkState.INSTANCE.setAdapter(new DjiReadOnlyDiagnostics());
+            SdkState.INSTANCE.setAdapter(new DjiReadOnlyDiagnostics(this));
             SdkState.INSTANCE.setSnapshot(new SdkSnapshot("NOT_REGISTERED", "STOPPED", "UNKNOWN",
-                false, false, false, 0L, 0L, "{}", "{}", "", 0));
+                false, false, false, 0L, 0L, "{}", "{}", "", 0, "NOT_CHECKED"));
         } catch (Throwable failure) {
             SdkState.INSTANCE.setSnapshot(new SdkSnapshot("SDK_LOAD_FAILED", "STOPPED", "UNKNOWN",
                 false, false, false, 0L, 0L, "{}", "{}",
-                failure.getClass().getSimpleName(), 0));
+                failure.getClass().getSimpleName(), 0, "NOT_CHECKED"));
         }
     }
 }

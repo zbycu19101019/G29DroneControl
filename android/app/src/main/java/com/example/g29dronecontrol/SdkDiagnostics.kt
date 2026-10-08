@@ -31,14 +31,15 @@ data class SdkSnapshot(
     val flightJson: String = "{}",
     val batteryJson: String = "{}",
     val error: String = "",
-    val initProgress: Int = 0
+    val initProgress: Int = 0,
+    val usbPermission: String = "NOT_CHECKED"
 ) {
     fun toJson(now: Long = SystemClock.elapsedRealtime()): JSONObject {
         val flightAge = if (lastFlightAt > 0) (now - lastFlightAt).coerceAtLeast(0) else -1
         val batteryAge = if (lastBatteryAt > 0) (now - lastBatteryAt).coerceAtLeast(0) else -1
         val flightFresh = connection == "READ_ONLY" && productConnected &&
             flightControllerConnected && flightAge in 0..1500
-        val batteryFresh = connection == "READ_ONLY" && batteryAge in 0..3000
+        val batteryFresh = connection == "READ_ONLY" && productConnected && batteryAge in 0..3000
         return JSONObject().put("registration", registration).put("connection", connection)
             .put("sdkVersion", if (registration == "SDK_NOT_INCLUDED") "none" else "4.18")
             .put("model", model).put("productConnected", productConnected)
@@ -50,6 +51,7 @@ data class SdkSnapshot(
             .put("telemetry", if (flightFresh) JSONObject(flightJson) else JSONObject.NULL)
             .put("battery", if (batteryFresh) JSONObject(batteryJson) else JSONObject.NULL)
             .put("error", error.take(180)).put("initProgress", initProgress)
+            .put("usbPermission", usbPermission)
     }
 }
 

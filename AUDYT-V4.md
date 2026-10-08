@@ -1,5 +1,7 @@
 # G29 Cockpit V4 / SDK read-only — wynik budowy
 
+Poniższy raport dotyczy pierwotnej budowy 0.4. Później użytkownik potwierdził uruchomienie i `REGISTERED` na telefonie. Aktualny wariant 0.5 dodaje własną zgodę USB przed rozpoczęciem SDK: [opis aktualizacji](docs/USB-FIX-0.5.md). Historyczne „nie instalowano/nie uruchamiano” poniżej nie opisuje obecnego stanu telefonu.
+
 Wariant V4 zawiera rzeczywistą integrację DJI Mobile SDK 4.18. Nie jest adapterem poleceń lotu Mini 2 SE. Klucz użytkownika jest skonfigurowany w prywatnym pliku budowy i osadzony w APK; nie sprawdzano jeszcze jego rejestracji na telefonie. Na prośbę użytkownika wykonano wyłącznie budowę i testy lokalne. Nie instalowano nowego APK, nie zamykano DJI Fly i nie uruchamiano połączenia SDK z pilotem/dronem.
 
 ## Zaimplementowane

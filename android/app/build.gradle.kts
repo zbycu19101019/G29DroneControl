@@ -23,8 +23,8 @@ android {
         minSdk = 26
         // SDK v4.18's official sample targets 34; this is not an Android 16 certification.
         targetSdk = if (withDjiSdk) 34 else 35
-        versionCode = if (withDjiSdk) 4 else 3
-        versionName = if (withDjiSdk) "0.4-dji-readonly" else "0.3-audit"
+        versionCode = 6
+        versionName = if (withDjiSdk) "0.6-operator-readonly" else "0.6-operator-bench"
         testInstrumentationRunner = "com.example.g29dronecontrol.BridgeInstrumentation"
         if (withDjiSdk) {
             manifestPlaceholders["djiAppKey"] = appKey

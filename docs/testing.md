@@ -1,12 +1,19 @@
-# Testy bezpieczeństwa
+# Testy V5 / Android 0.6
 
-1. Uruchom `G29CockpitV3.exe`. Status powinien pokazać `G29 ONLINE / 4 OSIE`.
-2. Obróć kierownicą. `RAW A0` powinno zmieniać się między wartościami ujemnymi i dodatnimi. Na testowanej kierownicy potwierdzono zakres około `-1.0..+1.0` przy ukrytym oknie SDL i ustawieniu `SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1`.
-3. Sprawdź, czy zmieniają się paski `STEERING` i `YAW`. Jeśli porusza się inna oś, przypisz jej numer w panelu mapowania.
-4. Uruchom kalibrację: 1,5 sekundy neutralnie, następnie przez 10 sekund pełny zakres każdej osi. Sprawdź zapis `config.json`.
-5. Kliknij `DEMO LOT`. Atrapa drona powinna wznieść się, polecieć do przodu, skręcić i opadać; mapa pokazuje ślad. `RESET SYMULACJI` zeruje pozycję.
-6. `STOP` powinien zerować polecenia i zamknąć TCP. Po STOP program nie podłącza automatycznie G29.
-7. `TELEFON / PILOT` → autoryzowany telefon → `POŁĄCZ MOSTEK`. `ACK OK` i RTT potwierdzają odbiór w telefonie. Diagnostyka USB pokazuje `DJI RC-N1` jako akcesorium bez przejmowania DJI Fly.
-8. Ten pakiet nie wysyła komend do DJI Mini 2 SE; wartości HUD są tylko symulacją.
-9. Otwórz DJI Fly na telefonie i `OBRAZ DJI FLY` w Windows. Sprawdź aktualizację obrazu. Nie klikaj poleceń startu; podgląd PC jest tylko do odczytu.
-10. Testy automatyczne Windows: `python -m unittest discover -s tests -v`. Testy instrumentacyjne Android w `android/app/src/androidTest` działają na localhost, bez otwierania USB DJI. Zbuduj i uruchom właściwy test runner na wybranym telefonie. Wyniki rzeczywistego testu opisano w `AUDYT.md`.
+Automatyczne: python -m unittest discover -s tests -v. Zrealizowano 45 testów Windows. Sprawdzają m.in. mapowanie, kalibrację, podpisy/nonce/ACK, STOP, utratę wejścia, maskowanie kluczy, świeżość, zapis konfiguracji, symulator i geometrie 960×700 / 1180×820. Testy GUI wymagają sesji Windows z pulpitem.
+
+Android: gradlew.bat -PwithDjiSdk=true :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug. Instrumentation com.example.g29dronecontrol.test/com.example.g29dronecontrol.BridgeInstrumentation wykonał 18 testów na wybranym Samsungu Android 16. Używa localhost, testowych tokenów, syntetycznych callbacków i renderu własnego View; nie żąda USB DJI, nie rejestruje SDK i nie wydaje komend lotu.
+
+## Sprawdzenie użytkownika bez lotu
+
+1. Zamknij V4. Uruchom G29CockpitV5.exe, sprawdź RAW A0 i paski przy rzeczywistym ruchu G29. Wynik wykrycia w self-test nie zastępuje testu ruchu.
+2. Kalibruj osie według START-V5.md. Puszczone pedały mają dawać zero.
+3. Demo pokazuje tylko model drona. Granica modelowanego pokoju nie ogranicza rzeczywistego lotu.
+4. Telefon: V5 → Przygotuj połączenie → porównaj kod → ręcznie potwierdź na 0.6. Sam Intent nie łączy.
+5. ACK oznacza mostek telefonu; kanały G29 nadal domyślnie wyłączone. Ich test wyłącznie na ziemi bez śmigieł.
+6. STOP / Escape oraz STOP na telefonie mają zamykać sesję i wyzerować kanały, bez automatycznego wznowienia.
+7. Odczyt DJI dopiero po naładowaniu drona, na ziemi bez śmigieł, po ręcznym zamknięciu DJI Fly i potwierdzeniu warunków w APK. Nie testuj ściany, lotu ani silników.
+8. Brak świeżych danych ma być pokazany jako brak, nie zero. Nieznana bateria nie oznacza sprawnej baterii. Odczyt USB i rejestracja nie potwierdzają FlightController.
+9. Podgląd wideo jest nieinteraktywny; nie pozwala na obsługę przycisków telefonu z Windows. Przejście do DJI Fly kończy pasywny odczyt SDK mostka.
+
+Szczegółowe wyniki i otwarte ryzyka: ../AUDYT-V5.md. Żadnego testu tej wersji nie wykonywano w locie.

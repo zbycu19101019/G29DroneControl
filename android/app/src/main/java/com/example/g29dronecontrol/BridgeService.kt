@@ -14,6 +14,7 @@ import android.os.Looper
 class BridgeService : Service() {
     companion object {
         @Volatile private var instance: BridgeService? = null
+        fun sessionActive(): Boolean = instance?.network?.isRunning == true
         fun emergencyStop() { instance?.network?.stop(); SdkState.adapter.stop(); BridgeState.neutral("STOP / ZERO") }
     }
     private lateinit var network: NetworkClient
@@ -41,10 +42,12 @@ class BridgeService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "STOP") { emergencyStop(); stopSelf(); return START_NOT_STICKY }
         val port = intent?.getIntExtra("port", 8765) ?: 8765
-        if (port in 1024..65535) network.connect(port) else { BridgeState.neutral("Błędny port"); stopSelf() }
+        val token = intent?.getStringExtra("pairingToken").orEmpty()
+        if (port in 1024..65535 && SignedFrames.validToken(token)) network.connect(port, token)
+        else { BridgeState.neutral("Brak zatwierdzonej sesji Windows"); stopSelf() }
         return START_NOT_STICKY
     }
-    override fun onTimeout(startId: Int, fgsType: Int) { network.stop(); stopSelf() }
-    override fun onDestroy() { network.shutdown(); instance = null; handler.removeCallbacksAndMessages(null); super.onDestroy() }
+    override fun onTimeout(startId: Int, fgsType: Int) { emergencyStop(); stopSelf() }
+    override fun onDestroy() { network.shutdown(); SdkState.adapter.stop(); instance = null; handler.removeCallbacksAndMessages(null); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 }

@@ -1,8 +1,8 @@
 <resources>
-    <string name="bridge_status">PC: %1$s\nSEQ: %2$d / watchdog 300 ms\nKanały testowe — bez poleceń lotu. Stan DJI poniżej.</string>
-    <string name="bridge_channels">YAW %1$+.3f\nPITCH %2$+.3f\nROLL %3$+.3f\nVERTICAL %4$+.3f</string>
-    <string name="bridge_usb">USB / tylko deskryptory:\n%1$s</string>
-    <string name="connect_pc">POŁĄCZ Z PC (ADB REVERSE)</string>
-    <string name="stop_bridge">STOP MOSTKA / ZERO</string>
-    <string name="refresh_usb">ODŚWIEŻ USB</string>
+    <string name="bridge_status">%1$s\nSekwencja %2$d  •  watchdog 300 ms</string>
+    <string name="bridge_channels">Obrót        %1$+.3f\nPrzód / tył  %2$+.3f\nPrzechylenie %3$+.3f\nPion         %4$+.3f</string>
+    <string name="aircraft_status">SDK: %1$s\nUSB: %2$s\nModel: %3$s\nProdukt: %4$s\nKontroler lotu: %5$s</string>
+    <string name="technical_status">DJI\n%1$s\n\nUSB / deskryptory\n%2$s</string>
+    <string name="session_missing">Brak nowej sesji. W Windows V5 kliknij Przygotuj połączenie.</string>
+    <string name="session_code">Nowa sesja Windows\nKod: %1$s</string>
 </resources>

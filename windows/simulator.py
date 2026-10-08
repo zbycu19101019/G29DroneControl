@@ -17,16 +17,21 @@ class FlightModel:
     vz: float = 0.0
     pitch_deg: float = 0.0
     roll_deg: float = 0.0
+    room_half_size: float = 12.0
+    boundary_stop: bool = False
     trail: deque[tuple[float, float]] = field(default_factory=lambda: deque([(0.0, 0.0)], maxlen=600))
 
     def reset(self) -> None:
         self.x = self.y = self.z = self.heading = 0.0
         self.vx = self.vy = self.vz = 0.0
         self.pitch_deg = self.roll_deg = 0.0
+        self.boundary_stop = False
         self.trail.clear()
         self.trail.append((0.0, 0.0))
 
     def step(self, command: dict[str, float], dt: float) -> None:
+        if not math.isfinite(dt) or any(not math.isfinite(float(command.get(k, 0))) for k in ("yaw", "pitch", "roll", "vertical")):
+            raise ValueError("Nieprawidłowe dane symulacji")
         dt = max(0.0, min(0.1, dt))
         yaw = max(-1.0, min(1.0, float(command.get("yaw", 0.0))))
         pitch = max(-1.0, min(1.0, float(command.get("pitch", 0.0))))
@@ -47,6 +52,15 @@ class FlightModel:
         self.x += self.vx * dt
         self.y += self.vy * dt
         self.z = max(0.0, self.z + self.vz * dt)
+        # Only a simulated room. No GPS fence or obstacle protection on a real aircraft.
+        bound = self.room_half_size - .75
+        self.boundary_stop = abs(self.x) >= bound or abs(self.y) >= bound or self.z >= 5
+        if abs(self.x) >= bound:
+            self.x = math.copysign(bound, self.x); self.vx = 0.0
+        if abs(self.y) >= bound:
+            self.y = math.copysign(bound, self.y); self.vy = 0.0
+        if self.z >= 5:
+            self.z = 5; self.vz = min(0, self.vz)
         if self.z == 0.0 and self.vz < 0:
             self.vz = 0.0
             self.vx = self.vy = 0.0

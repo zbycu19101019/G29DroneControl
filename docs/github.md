@@ -36,7 +36,7 @@ Wariant DJI: zarejestruj własną aplikację Android o package name com.example.
 
 Alternatywnie użyj zmiennej DJI_APP_KEY. Nie wpisuj klucza do źródeł, commitów, zgłoszeń ani logów. Gotowy wariant APK osadza klucz, więc nie publikuj go bez świadomej decyzji o sposobie dystrybucji. Sama poprawna rejestracja klucza nie dodaje wsparcia Mini 2 SE.
 
-Mostek używa `adb reverse tcp:8765 tcp:8765`; watchdog kanałów testowych wynosi 300 ms. Pełny format: protocol.md. Testy połączenia DJI wykonuj na ziemi bez śmigieł. Instrukcje: START-V4.md; zakres weryfikacji i ostrzeżenia SDK: ../AUDYT-V4.md.
+Mostek używa `adb reverse tcp:8765 tcp:8765`; watchdog kanałów testowych wynosi 300 ms. V5 / Android 0.6 wymaga ręcznego porównania kodu i zatwierdzenia sesji na telefonie; nie ma auto-connect przez Intent ani zgodności z v1. Pełny format: protocol.md. Testy połączenia DJI wykonuj na ziemi bez śmigieł. Instrukcje: START-V5.md; zakres weryfikacji i ostrzeżenia SDK: ../AUDYT-V5.md.
 
 ## Budowa pakietu Windows
 

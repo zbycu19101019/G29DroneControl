@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -18,11 +19,21 @@ def load_config(path: Path) -> dict[str, Any]:
 
 
 def save_config(path: Path, config: dict[str, Any]) -> None:
-    temporary = path.with_suffix(".tmp")
-    with temporary.open("w", encoding="utf-8") as handle:
-        json.dump(config, handle, indent=2, ensure_ascii=False)
-        handle.write("\n")
-    temporary.replace(path)
+    from windows.configuration import validate_config
+    validate_config(config)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=path.name + ".", suffix=".tmp", delete=False) as handle:
+            temporary = Path(handle.name)
+            json.dump(config, handle, indent=2, ensure_ascii=False, allow_nan=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def init_pygame() -> None:

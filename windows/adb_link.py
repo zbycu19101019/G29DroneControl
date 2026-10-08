@@ -46,15 +46,22 @@ class AdbLink:
                 found.append({"serial": parts[0], "state": parts[1], "description": " ".join(parts[2:])})
         return found
 
-    def setup(self, serial: str, port: int):
+    def setup(self, serial: str, port: int, pairing_token: str):
+        from windows.signed_frames import key_bytes
+        key_bytes(pairing_token)
+        if type(port) is not int or not 1024 <= port <= 65535:
+            raise ValueError("Nieprawidłowy port mostka")
         if self.run(["get-state"], serial) != "device":
             raise RuntimeError("Telefon nie jest autoryzowany lub jest offline.")
         self.run(["reverse", f"tcp:{port}", f"tcp:{port}"], serial)
         installed = self.run(["shell", "pm", "path", PACKAGE], serial)
         if not installed.startswith("package:"):
             raise RuntimeError("Kanał ADB gotowy. Najpierw kliknij ZAINSTALUJ APK.")
-        self.run(["shell", "am", "start", "-n", f"{PACKAGE}/.MainActivity", "--ez", "connect", "true", "--ei", "port", str(port)], serial)
-        return "ADB reverse gotowy; uruchomiono most Android. Oczekiwanie na ACK."
+        try:
+            self.run(["shell", "am", "start", "-n", f"{PACKAGE}/.MainActivity", "--es", "pairingToken", pairing_token, "--ei", "port", str(port)], serial)
+        except (RuntimeError, subprocess.TimeoutExpired) as error:
+            raise RuntimeError(str(error).replace(pairing_token, "[klucz sesji ukryty]")) from None
+        return "Sesja przygotowana. Porównaj kod z Windows i na telefonie 0.6 kliknij Potwierdź komputer i połącz. SDK i połączenie nie zostały uruchomione automatycznie."
 
     def install(self, serial: str, apk: Path):
         if not apk.is_file():

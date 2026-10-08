@@ -14,7 +14,7 @@ class ConnectionPanel:
         self.window = tk.Toplevel(owner.root)
         self.window.title("PC ↔ ANDROID ↔ PILOT / DIAGNOSTYKA")
         self.window.geometry("800x650")
-        self.window.configure(bg="#070c10")
+        self.window.configure(bg="#f2f5f9")
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="adb")
         self.queue = Queue()
         self.closed = False
@@ -23,7 +23,9 @@ class ConnectionPanel:
         self.adb_path = tk.StringVar(value=owner.config.get("adbPath", ""))
         self.address = tk.StringVar()
         self.code = tk.StringVar()
-        tk.Label(self.window, text="Połączenie z telefonem nie oznacza połączenia z dronem.\nMini 2 SE: brak oficjalnego wsparcia. Wariant DJI SDK służy tylko do odczytu.", bg="#070c10", fg="#ffb347", justify="left").pack(fill="x", padx=15, pady=12)
+        self.session_code = tk.StringVar(value="Kod sesji: —")
+        tk.Label(self.window, textvariable=self.session_code, font=("Segoe UI", 14, "bold"), bg="#f2f5f9", fg="#142335").pack(fill="x", padx=15, pady=(12, 0))
+        tk.Label(self.window, text="Połączenie z telefonem nie oznacza połączenia z dronem.\nMini 2 SE: brak oficjalnego wsparcia. Wariant DJI SDK służy tylko do odczytu.", bg="#f2f5f9", fg="#a16207", justify="left").pack(fill="x", padx=15, pady=12)
         row = tk.Frame(self.window); row.pack(fill="x", padx=15)
         tk.Label(row, text="adb.exe (puste = automatycznie)").pack(side="left")
         tk.Entry(row, textvariable=self.adb_path).pack(side="left", expand=True, fill="x")
@@ -33,14 +35,14 @@ class ConnectionPanel:
         self.devices.pack(side="left", expand=True, fill="x")
         tk.Button(row, text="ODŚWIEŻ TELEFONY", command=self.refresh).pack(side="right")
         row = tk.Frame(self.window); row.pack(fill="x", padx=15, pady=5)
-        for label, callback in (("1. ZAINSTALUJ APK", self.install), ("2. POŁĄCZ MOSTEK", self.connect), ("DIAGNOSTYKA USB / FLY", self.diagnostics)):
+        for label, callback in (("1. Zainstaluj APK 0.6", self.install), ("2. Przygotuj połączenie", self.connect), ("Diagnostyka USB", self.diagnostics)):
             tk.Button(row, text=label, command=callback).pack(side="left", padx=3)
         row = tk.Frame(self.window); row.pack(fill="x", padx=15, pady=5)
         tk.Button(row, text="OBRAZ DJI FLY (TYLKO PODGLĄD)", command=self.start_video).pack(side="left", padx=3)
         tk.Button(row, text="ZAMKNIJ WIDEO", command=self.owner.video.stop).pack(side="left", padx=3)
         tk.Button(row, text="DANE DJI SDK", command=self.owner.open_dji_panel).pack(side="left", padx=3)
-        tk.Label(self.window, text="Podgląd ekranu telefonu w osobnym oknie. Otwórz DJI Fly i widok kamery.\nNie jest to osobny strumień SDK ani bezpieczny zamiennik bezpośredniej obserwacji drona.", bg="#070c10", fg="#91adb4", justify="left").pack(fill="x", padx=15)
-        tk.Label(self.window, text="Pilot zajmuje USB? Android 11+: debugowanie bezprzewodowe.\nIP:PORT parowania i IP:PORT połączenia mogą być różne. Nie zapisujemy kodu.", bg="#070c10", fg="#91adb4", justify="left").pack(fill="x", padx=15, pady=8)
+        tk.Label(self.window, text="Podgląd ekranu telefonu w osobnym oknie. Otwórz DJI Fly i widok kamery.\nNie jest to osobny strumień SDK ani bezpieczny zamiennik bezpośredniej obserwacji drona.", bg="#f2f5f9", fg="#64748b", justify="left").pack(fill="x", padx=15)
+        tk.Label(self.window, text="Pilot zajmuje USB? Android 11+: debugowanie bezprzewodowe.\nIP:PORT parowania i IP:PORT połączenia mogą być różne. Nie zapisujemy kodu.", bg="#f2f5f9", fg="#64748b", justify="left").pack(fill="x", padx=15, pady=8)
         row = tk.Frame(self.window); row.pack(fill="x", padx=15)
         tk.Label(row, text="IP:PORT").pack(side="left")
         tk.Entry(row, textvariable=self.address, width=24).pack(side="left")
@@ -48,10 +50,10 @@ class ConnectionPanel:
         tk.Entry(row, textvariable=self.code, width=9, show="•").pack(side="left")
         tk.Button(row, text="PARUJ", command=self.pair).pack(side="left")
         tk.Button(row, text="POŁĄCZ Wi-Fi", command=self.wifi).pack(side="left")
-        self.text = tk.Text(self.window, bg="#05090c", fg="#00e6c1", font=("Consolas", 9), wrap="word")
+        self.text = tk.Text(self.window, bg="#f8fafc", fg="#2563eb", font=("Segoe UI", 9), wrap="word")
         self.text.pack(fill="both", expand=True, padx=15, pady=12)
         self.window.protocol("WM_DELETE_WINDOW", self.close)
-        self.window.after(100, self.poll)
+        self.poll_job = self.window.after(100, self.poll)
         self.refresh()
 
     def choose_adb(self):
@@ -85,6 +87,8 @@ class ConnectionPanel:
     def poll(self):
         if self.closed:
             return
+        link = self.owner.link
+        self.session_code.set("Kod sesji: " + (link.pairing_code if link else "—") + " • porównaj z telefonem")
         try:
             while True:
                 success, result, callback = self.queue.get_nowait()
@@ -95,7 +99,7 @@ class ConnectionPanel:
                     self.report(result)
         except Empty:
             pass
-        self.window.after(100, self.poll)
+        self.poll_job = self.window.after(100, self.poll)
 
     def refresh(self):
         def completed(devices):
@@ -130,7 +134,8 @@ class ConnectionPanel:
         self.owner.start_link()
         if self.owner.link is not None:
             port = int(self.owner.config["transportPort"])
-            self.submit(lambda adb: adb.setup(serial, port))
+            token = self.owner.link.pairing_token
+            self.submit(lambda adb: adb.setup(serial, port, token))
 
     def diagnostics(self):
         serial = self.selected()
@@ -148,5 +153,6 @@ class ConnectionPanel:
 
     def close(self):
         self.closed = True
+        self.window.after_cancel(self.poll_job)
         self.pool.shutdown(wait=False, cancel_futures=True)
         self.window.destroy()

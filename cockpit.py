@@ -19,20 +19,22 @@ from windows.bridge_link import JsonLineServer
 from windows.configuration import validate_config
 from windows.connection_panel import ConnectionPanel
 from windows.dji_telemetry import DjiTelemetryPanel
+from windows.dji_telemetry import diagnostics_view
+from windows.safety import InputLimiter, safety_summary
 from windows.simulator import FlightModel
 from windows.video_link import ScreenViewer
 
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 BUNDLED_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
 CONFIG_PATH = APP_DIR / "config.json"
-BG = "#070c10"
-PANEL = "#101a20"
-EDGE = "#23404b"
-NEON = "#00e6c1"
-AMBER = "#ffb347"
-RED = "#ff4968"
-WHITE = "#e3f9f5"
-MUTED = "#91adb4"
+BG = "#f2f5f9"
+PANEL = "#ffffff"
+EDGE = "#d7e0e9"
+NEON = "#2563eb"
+AMBER = "#a16207"
+RED = "#b91c1c"
+WHITE = "#142335"
+MUTED = "#64748b"
 
 
 def default_config() -> dict:
@@ -77,12 +79,13 @@ class Cockpit:
         except (OSError, ValueError, TypeError, AttributeError) as exc:
             messagebox.showwarning("Konfiguracja", f"Nieprawidłowe ustawienia: {exc}\nUżywam bezpiecznych domyślnych. Plik nie został zmieniony.")
             self.config = default_config()
-        self.root.title("G29 // OPERATOR COCKPIT")
+        self.root.title("G29 Operator V5 • diagnostyka i symulator")
         self.root.geometry("1180x820")
         self.root.minsize(960, 700)
         self.root.configure(bg=BG)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.bind("<Escape>", lambda _event: self.stop())
+        self.root.report_callback_exception = self.callback_error
         self.reader: G29Reader | None = None
         self.device = None
         self.link: JsonLineServer | None = None
@@ -103,6 +106,10 @@ class Cockpit:
         self.raw_samples: deque[list[float]] = deque(maxlen=24)
         self.state: dict = {}
         self.output = {name: 0.0 for name in ("yaw", "pitch", "roll", "vertical")}
+        self.limiter = InputLimiter()
+        self.inputs_enabled = tk.BooleanVar(value=False)
+        self.cautious = tk.BooleanVar(value=True)
+        self.safety_status = tk.StringVar(value="Sterowanie lotem wyłączone • Mini 2 SE nie wykrywa ścian")
         self.flight = FlightModel()
         self.last_sim_step = time.monotonic()
         self.device_choices: list[tuple[int, str, int, int, int]] = []
@@ -121,24 +128,26 @@ class Cockpit:
         self.build_ui()
         init_pygame()
         self.refresh_devices()
-        self.root.after(25, self.tick)
+        self.last_sim_step = time.monotonic()
+        self.tick_job = self.root.after(25, self.tick)
 
     def section(self, parent, title: str) -> tk.Frame:
         frame = tk.Frame(parent, bg=PANEL, highlightbackground=EDGE, highlightthickness=1)
-        tk.Label(frame, text=title, bg=PANEL, fg=NEON, font=("Consolas", 11, "bold"), anchor="w").pack(fill="x", padx=12, pady=(10, 5))
+        tk.Label(frame, text=title, bg=PANEL, fg=NEON, font=("Segoe UI", 11, "bold"), anchor="w").pack(fill="x", padx=12, pady=(10, 5))
         return frame
 
     def button(self, parent, text, command, accent=NEON):
-        return tk.Button(parent, text=text, command=command, bg="#172830", fg=accent, activebackground=EDGE, activeforeground=WHITE, font=("Consolas", 9, "bold"), relief="flat", padx=12, pady=8)
+        return tk.Button(parent, text=text, command=command, bg="#eaf0f8", fg=accent, activebackground=EDGE, activeforeground=WHITE, font=("Segoe UI", 9, "bold"), relief="flat", padx=12, pady=8, cursor="hand2")
 
     def build_ui(self):
         top = tk.Frame(self.root, bg=BG)
         top.pack(fill="x", padx=18, pady=(15, 8))
-        tk.Label(top, text="G29 / OPERATOR COCKPIT", bg=BG, fg=NEON, font=("Consolas", 23, "bold")).pack(side="left")
+        tk.Label(top, text="G29 Operator", bg=BG, fg=WHITE, font=("Segoe UI", 23, "bold")).pack(side="left")
+        tk.Label(top, text="V5 • Windows + Android", bg=BG, fg=MUTED, font=("Segoe UI", 10)).pack(side="left", padx=16)
         self.led = tk.Canvas(top, width=20, height=20, bg=BG, highlightthickness=0)
         self.led.pack(side="right", padx=10)
         self.led_circle = self.led.create_oval(3, 3, 17, 17, fill=RED, outline="")
-        tk.Label(top, textvariable=self.status, bg=BG, fg=WHITE, font=("Consolas", 11)).pack(side="right")
+        tk.Label(top, textvariable=self.status, bg=BG, fg=WHITE, font=("Segoe UI", 11)).pack(side="right")
         tk.Frame(self.root, bg=NEON, height=1).pack(fill="x", padx=18)
 
         toolbar = tk.Frame(self.root, bg=BG)
@@ -150,6 +159,8 @@ class Cockpit:
         self.button(toolbar, "DEMO LOT", self.start_demo, AMBER).pack(side="left", padx=(0, 8))
         self.button(toolbar, "STOP", self.stop, RED).pack(side="left", padx=(0, 8))
         self.button(toolbar, "ZAPISZ", self.save_settings, AMBER).pack(side="right")
+        tk.Label(self.root, textvariable=self.safety_status, bg="#fff7ed", fg="#9a3412", anchor="w",
+                 justify="left", wraplength=1100, font=("Segoe UI", 10), padx=12, pady=9).pack(fill="x", padx=18, pady=(0, 10))
 
         body = tk.Frame(self.root, bg=BG)
         body.pack(fill="both", expand=True, padx=18, pady=(0, 12))
@@ -176,11 +187,11 @@ class Cockpit:
         horizon_panel.pack(fill="both", expand=True, pady=(0, 8))
         flight_view = tk.Frame(horizon_panel, bg=PANEL)
         flight_view.pack(fill="both", expand=True, padx=12, pady=(0, 8))
-        self.horizon = tk.Canvas(flight_view, bg="#102833", highlightthickness=0)
+        self.horizon = tk.Canvas(flight_view, bg="#6d9fbe", highlightthickness=0)
         self.horizon.pack(side="left", fill="both", expand=True, padx=(0, 5))
-        self.map_canvas = tk.Canvas(flight_view, bg="#09131a", highlightthickness=0)
+        self.map_canvas = tk.Canvas(flight_view, bg="#f8fafc", highlightthickness=0)
         self.map_canvas.pack(side="right", fill="both", expand=True, padx=(5, 0))
-        self.flight_data = tk.Label(horizon_panel, text="DRON SYMULOWANY  X +0.0 m  Y +0.0 m  H 0.0 m  V 0.0 m/s", bg=PANEL, fg=WHITE, font=("Consolas", 9), anchor="w")
+        self.flight_data = tk.Label(horizon_panel, text="DRON SYMULOWANY  X +0.0 m  Y +0.0 m  H 0.0 m  V 0.0 m/s", bg=PANEL, fg=WHITE, font=("Segoe UI", 9), anchor="w")
         self.flight_data.pack(fill="x", padx=12, pady=(0, 10))
         self.button(horizon_panel, "RESET SYMULACJI", self.reset_simulator, AMBER).pack(anchor="w", padx=12, pady=(0, 10))
         channel_panel = self.section(left, "WYJŚCIE / KOMENDY SYMULATORA")
@@ -189,28 +200,28 @@ class Cockpit:
         for name in self.output:
             row = tk.Frame(channel_panel, bg=PANEL)
             row.pack(fill="x", padx=12, pady=5)
-            tk.Label(row, text=name.upper(), bg=PANEL, fg=MUTED, font=("Consolas", 10), width=9, anchor="w").pack(side="left")
+            tk.Label(row, text=name.upper(), bg=PANEL, fg=MUTED, font=("Segoe UI", 10), width=9, anchor="w").pack(side="left")
             bar = tk.Canvas(row, height=16, bg=BG, highlightbackground=EDGE, highlightthickness=1)
             bar.pack(side="left", fill="x", expand=True, padx=8)
-            tk.Label(row, textvariable=self.output_labels[name], bg=PANEL, fg=NEON, font=("Consolas", 10), width=8).pack(side="right")
+            tk.Label(row, textvariable=self.output_labels[name], bg=PANEL, fg=NEON, font=("Segoe UI", 10), width=8).pack(side="right")
             self.channel_bars[name] = bar
         tk.Frame(channel_panel, bg=PANEL, height=8).pack()
-        tk.Label(left, textvariable=self.video_status, bg=BG, fg=MUTED, font=("Consolas", 8), wraplength=620, justify="left", anchor="w").pack(fill="x", pady=6)
+        tk.Label(left, textvariable=self.video_status, bg=BG, fg=MUTED, font=("Segoe UI", 8), wraplength=620, justify="left", anchor="w").pack(fill="x", pady=6)
 
         input_panel = self.section(right, "G29 / SUROWE I PRZELICZONE OSIE")
         input_panel.pack(fill="x", pady=(0, 8))
-        self.raw_line = tk.Label(input_panel, textvariable=self.raw_status, bg=PANEL, fg=AMBER, font=("Consolas", 9), anchor="w", justify="left", wraplength=350)
+        self.raw_line = tk.Label(input_panel, textvariable=self.raw_status, bg=PANEL, fg=AMBER, font=("Segoe UI", 9), anchor="w", justify="left", wraplength=350)
         self.raw_line.pack(fill="x", padx=12, pady=4)
         self.input_bars = {}
         for name in AXES:
             row = tk.Frame(input_panel, bg=PANEL)
             row.pack(fill="x", padx=12, pady=4)
-            tk.Label(row, text=name.upper(), bg=PANEL, fg=MUTED, font=("Consolas", 9), width=10, anchor="w").pack(side="left")
+            tk.Label(row, text=name.upper(), bg=PANEL, fg=MUTED, font=("Segoe UI", 9), width=10, anchor="w").pack(side="left")
             bar = tk.Canvas(row, height=13, bg=BG, highlightbackground=EDGE, highlightthickness=1)
             bar.pack(side="left", fill="x", expand=True, padx=5)
-            tk.Label(row, textvariable=self.input_labels[name], bg=PANEL, fg=WHITE, font=("Consolas", 9), width=7).pack(side="right")
+            tk.Label(row, textvariable=self.input_labels[name], bg=PANEL, fg=WHITE, font=("Segoe UI", 9), width=7).pack(side="right")
             self.input_bars[name] = bar
-        tk.Label(input_panel, textvariable=self.help_status, bg=PANEL, fg=MUTED, font=("Consolas", 8), wraplength=350, justify="left").pack(fill="x", padx=12, pady=(5, 10))
+        tk.Label(input_panel, textvariable=self.help_status, bg=PANEL, fg=MUTED, font=("Segoe UI", 8), wraplength=350, justify="left").pack(fill="x", padx=12, pady=(5, 10))
 
         mapping = self.section(right, "URZĄDZENIE / PRZYPISANIE OSI")
         mapping.pack(fill="x", pady=(0, 8))
@@ -219,7 +230,7 @@ class Cockpit:
         grid = tk.Frame(mapping, bg=PANEL)
         grid.pack(fill="x", padx=12, pady=(4, 10))
         for row, name in enumerate(AXES):
-            tk.Label(grid, text=name.upper(), bg=PANEL, fg=MUTED, font=("Consolas", 9), width=12, anchor="w").grid(row=row, column=0, sticky="w", pady=2)
+            tk.Label(grid, text=name.upper(), bg=PANEL, fg=MUTED, font=("Segoe UI", 9), width=12, anchor="w").grid(row=row, column=0, sticky="w", pady=2)
             field = ttk.Combobox(grid, textvariable=self.mapping_vars[name], width=7, state="readonly")
             field.grid(row=row, column=1, sticky="w", padx=4)
             field.bind("<<ComboboxSelected>>", lambda _event, axis=name: self.update_axis_map(axis))
@@ -235,10 +246,17 @@ class Cockpit:
 
         watch = self.section(right, "ŁĄCZE / WATCHDOG")
         watch.pack(fill="x", pady=(0, 8), before=mapping)
-        tk.Label(watch, textvariable=self.link_status, bg=PANEL, fg=AMBER, font=("Consolas", 9), anchor="w").pack(fill="x", padx=12, pady=(2, 0))
-        self.metrics = tk.Label(watch, text="TX: 0/s | OSTATNIA: -- | BRAK POTWIERDZENIA Z ANDROIDA", bg=PANEL, fg=MUTED, font=("Consolas", 8), anchor="w", wraplength=350, justify="left")
+        safe = self.section(right, "Zabezpieczenia kanałów testowych")
+        safe.pack(fill="x", pady=(0, 8), before=mapping)
+        tk.Checkbutton(safe, text="Włącz kanały G29 do mostka (nie do drona)", variable=self.inputs_enabled,
+                       command=self.confirm_test_inputs, bg=PANEL, fg=WHITE, selectcolor=PANEL,
+                       activebackground=PANEL, wraplength=330).pack(anchor="w", padx=12, pady=6)
+        tk.Checkbutton(safe, text="Tryb ostrożny: limit 35% + łagodne narastanie", variable=self.cautious,
+                       bg=PANEL, fg=WHITE, selectcolor=PANEL, activebackground=PANEL, wraplength=330).pack(anchor="w", padx=12, pady=(0, 8))
+        tk.Label(watch, textvariable=self.link_status, bg=PANEL, fg=AMBER, font=("Segoe UI", 9), anchor="w").pack(fill="x", padx=12, pady=(2, 0))
+        self.metrics = tk.Label(watch, text="TX: 0/s | OSTATNIA: -- | BRAK POTWIERDZENIA Z ANDROIDA", bg=PANEL, fg=MUTED, font=("Segoe UI", 8), anchor="w", wraplength=350, justify="left")
         self.metrics.pack(fill="x", padx=12, pady=(0, 10))
-        self.log_box = tk.Text(right, bg="#05090c", fg=MUTED, font=("Consolas", 8), height=5, relief="flat", state="disabled")
+        self.log_box = tk.Text(right, bg="#f8fafc", fg=MUTED, font=("Segoe UI", 8), height=5, relief="flat", state="disabled")
         self.log_box.pack(fill="both", expand=True)
 
     def scroll_sidebar(self, event):
@@ -249,8 +267,8 @@ class Cockpit:
     def add_slider(self, parent, label, variable, low, high):
         row = tk.Frame(parent, bg=PANEL)
         row.pack(fill="x", padx=10, pady=3)
-        tk.Label(row, text=label, bg=PANEL, fg=MUTED, font=("Consolas", 8), anchor="w", width=19).pack(side="left")
-        tk.Label(row, textvariable=variable, bg=PANEL, fg=NEON, font=("Consolas", 8), width=4).pack(side="right")
+        tk.Label(row, text=label, bg=PANEL, fg=MUTED, font=("Segoe UI", 8), anchor="w", width=19).pack(side="left")
+        tk.Label(row, textvariable=variable, bg=PANEL, fg=NEON, font=("Segoe UI", 8), width=4).pack(side="right")
         tk.Scale(row, variable=variable, from_=low, to=high, resolution=0.01, orient="horizontal", showvalue=False, bg=PANEL, fg=NEON, troughcolor=EDGE, highlightthickness=0, command=self.live_tuning).pack(fill="x", expand=True, side="left")
 
     def log(self, text: str):
@@ -316,6 +334,16 @@ class Cockpit:
         self.config["steeringSensitivity"] = float(self.sensitivity.get())
         self.config["outputLimit"] = float(self.limit.get())
 
+    def confirm_test_inputs(self):
+        if self.inputs_enabled.get() and not messagebox.askokcancel("Kanały testowe", "Dron nie jest sterowany przez ten mostek. Potwierdź test na ziemi, bez śmigieł.\nMini 2 SE nie ma ochrony przed ścianami.", parent=self.root):
+            self.inputs_enabled.set(False)
+        self.limiter.reset()
+
+    def callback_error(self, error_type, error, traceback):
+        self.stop()
+        self.log("Błąd aplikacji: " + error_type.__name__ + ". Wyjścia zablokowane.")
+        self.safety_status.set("Błąd aplikacji — STOP. Kanały testowe wyzerowane; dron nie jest sterowany.")
+
     def save_settings(self):
         self.live_tuning()
         self.config["profile"] = self.profile.get()
@@ -326,6 +354,7 @@ class Cockpit:
             messagebox.showerror("Zapis konfiguracji", str(exc))
 
     def start_calibration(self):
+        self.inputs_enabled.set(False)
         if self.reader is None:
             self.connect_selected()
         if self.reader is None:
@@ -411,6 +440,7 @@ class Cockpit:
             messagebox.showerror("Port TCP", str(exc))
 
     def start_demo(self):
+        self.inputs_enabled.set(False)
         if self.link is not None:
             self.link.close()
             self.link = None
@@ -435,6 +465,7 @@ class Cockpit:
         return {"yaw": 0.0, "pitch": 0.0, "roll": 0.0, "vertical": 0.0}
 
     def neutral(self):
+        self.limiter.reset()
         self.output = {name: 0.0 for name in self.output}
         if self.link is not None and self.link.connected:
             self.link.send({"timestampMs": int(time.time() * 1000), "seq": self.seq, "output": self.output,
@@ -453,6 +484,7 @@ class Cockpit:
         self.log("SYMULACJA: pozycja i trasa wyzerowane")
 
     def stop(self):
+        self.inputs_enabled.set(False)
         self.stop_latched = True
         self.calibration = None
         self.demo_started = None
@@ -489,44 +521,47 @@ class Cockpit:
         canvas = self.horizon
         canvas.delete("all")
         width = max(100, canvas.winfo_width())
-        height = max(250, canvas.winfo_height())
+        height = max(100, canvas.winfo_height())
         center_x, center_y = width / 2, height / 2
         pitch = -self.flight.pitch_deg / 25.0 * height * 0.35
         roll_angle = math.radians(self.flight.roll_deg)
         slope = math.tan(roll_angle)
         left_y = center_y + pitch - slope * center_x
         right_y = center_y + pitch + slope * center_x
-        canvas.create_rectangle(0, 0, width, height, fill="#123847", outline="")
-        canvas.create_polygon(0, left_y, width, right_y, width, height, 0, height, fill="#50382c", outline="")
-        canvas.create_line(0, left_y, width, right_y, fill=WHITE, width=2)
+        canvas.create_rectangle(0, 0, width, height, fill="#6d9fbe", outline="")
+        canvas.create_polygon(0, left_y, width, right_y, width, height, 0, height, fill="#b69c7b", outline="")
+        canvas.create_line(0, left_y, width, right_y, fill="#ffffff", width=2)
         for offset in (-60, -30, 30, 60):
             y = center_y + pitch + offset
             canvas.create_line(center_x - 25, y - slope * 25, center_x + 25, y + slope * 25, fill=MUTED)
         canvas.create_line(center_x - 65, center_y, center_x - 14, center_y, fill=AMBER, width=3)
         canvas.create_line(center_x + 14, center_y, center_x + 65, center_y, fill=AMBER, width=3)
         canvas.create_oval(center_x - 5, center_y - 5, center_x + 5, center_y + 5, outline=AMBER, width=2)
-        canvas.create_text(15, 18, anchor="nw", text=f"YAW {self.output['yaw']:+.3f}  PITCH {self.output['pitch']:+.3f}  ROLL {self.output['roll']:+.3f}", fill=NEON, font=("Consolas", 11, "bold"))
-        canvas.create_text(width - 15, height - 18, anchor="se", text="SIMULATED ATTITUDE / NO AIRCRAFT TELEMETRY", fill=WHITE, font=("Consolas", 8))
+        canvas.create_text(15, 18, anchor="nw", text="Orientacja symulatora", fill="#ffffff", font=("Segoe UI", 11, "bold"))
+        canvas.create_text(width / 2, height - 18, text="SYMULACJA • nie telemetria drona", fill="#ffffff", font=("Segoe UI", 8))
 
     def draw_flight_map(self):
         canvas = self.map_canvas
         canvas.delete("all")
         width = max(100, canvas.winfo_width())
-        height = max(250, canvas.winfo_height())
+        height = max(100, canvas.winfo_height())
         px_per_m = 12.0
         center_x, center_y = width / 2, height / 2
         camera_x, camera_y = self.flight.x, self.flight.y
         grid_x, grid_y = math.floor(camera_x / 5), math.floor(camera_y / 5)
         for x in range(grid_x - 8, grid_x + 9):
             screen_x = center_x + (x * 5 - camera_x) * px_per_m
-            canvas.create_line(screen_x, 0, screen_x, height, fill="#20333d")
+            canvas.create_line(screen_x, 0, screen_x, height, fill="#e2e8f0")
         for y in range(grid_y - 8, grid_y + 9):
             screen_y = center_y - (y * 5 - camera_y) * px_per_m
-            canvas.create_line(0, screen_y, width, screen_y, fill="#20333d")
+            canvas.create_line(0, screen_y, width, screen_y, fill="#e2e8f0")
         origin_x = center_x - camera_x * px_per_m
         origin_y = center_y + camera_y * px_per_m
+        room = (self.flight.room_half_size - .75) * px_per_m
+        canvas.create_rectangle(origin_x - room, origin_y - room, origin_x + room, origin_y + room,
+                                outline=RED if self.flight.boundary_stop else "#94a3b8", dash=(5, 4), width=2)
         canvas.create_oval(origin_x - 4, origin_y - 4, origin_x + 4, origin_y + 4, fill=AMBER, outline="")
-        canvas.create_text(12, 12, text="N ↑  TRASA LOTU / SYMULACJA", anchor="nw", fill=NEON, font=("Consolas", 9, "bold"))
+        canvas.create_text(12, 12, text="N ↑  TRASA LOTU / SYMULACJA", anchor="nw", fill=NEON, font=("Segoe UI", 9, "bold"))
         points = []
         for x, y in self.flight.trail:
             points.extend((center_x + (x - camera_x) * px_per_m, center_y - (y - camera_y) * px_per_m))
@@ -552,6 +587,10 @@ class Cockpit:
         self.flight_data.configure(text=f"DRON SYMULOWANY  X {self.flight.x:+.1f} m  Y {self.flight.y:+.1f} m  H {self.flight.z:.1f} m  V {speed:.1f} m/s  HDG {math.degrees(h):.0f}°")
 
     def tick(self):
+        # Direct test invocations and the timer must not create parallel loops.
+        if self.tick_job is not None:
+            self.root.after_cancel(self.tick_job)
+            self.tick_job = None
         now = time.monotonic()
         for event in self.video.poll():
             self.video_status.set("WIDEO: " + event[:150])
@@ -559,6 +598,9 @@ class Cockpit:
                 self.log("WIDEO: " + event[:180])
         sim_dt = now - self.last_sim_step
         self.last_sim_step = now
+        if sim_dt >= .3 and (self.reader is not None or self.link is not None or self.demo_started is not None):
+            self.stop()
+            self.log("Przerwa pętli ≥300 ms — wymagane ręczne wznowienie.")
         if self.reader is None and not self.stop_latched and now >= self.next_retry:
             self.next_retry = now + 2.0
             self.connect_selected(quiet=True)
@@ -575,8 +617,9 @@ class Cockpit:
                     self.calibration_step(self.state)
                     self.neutral()
                 else:
-                    self.output = map_state(self.state, self.config, self.profile.get())
-            except (pygame.error, RuntimeError, OSError) as exc:
+                    command = map_state(self.state, self.config, self.profile.get())
+                    self.output = self.limiter.apply(command, sim_dt, min(.35, self.limit.get())) if self.cautious.get() else command
+            except (pygame.error, RuntimeError, OSError, ValueError, TypeError, KeyError) as exc:
                 self.log(f"UTRATA G29: {exc}")
                 self.neutral()
                 if self.link:
@@ -610,12 +653,18 @@ class Cockpit:
             self.link.poll()
             if was_connected and not self.link.connected:
                 self.log(self.link.reason)
-            active = self.reader is not None and not self.stop_latched and self.calibration is None and self.link.healthy
+                self.inputs_enabled.set(False)
+                self.limiter.reset()
+                self.output = dict.fromkeys(self.output, 0.0)
+                self.help_status.set("Utrata sesji telefonu. Ponownie potwierdź sesję i ręcznie włącz kanały testowe.")
+            active = self.inputs_enabled.get() and self.reader is not None and not self.stop_latched and self.calibration is None and self.link.healthy
             packet = {"timestampMs": int(time.time() * 1000), "seq": self.seq, "output": self.output if active else dict.fromkeys(self.output, 0.0),
                       "heartbeat": True, "inputConnected": active, "emergency": self.stop_latched}
             if self.link.send(packet):
                 self.last_tx = now
                 self.sent_window += 1
+            elif was_connected and not self.link.connected:
+                self.inputs_enabled.set(False)
             self.seq += 1
         if now - self.rate_start >= 1.0:
             self.sent_rate = round(self.sent_window / (now - self.rate_start))
@@ -633,6 +682,12 @@ class Cockpit:
             self.link_status.set("TELEFON: TCP / OCZEKIWANIE NA ACK")
         else:
             self.link_status.set("TELEFON: " + self.link.reason[:48])
+        ack_age = (now - self.link.last_ack) * 1000 if self.link and self.link.last_ack else math.inf
+        report = safety_summary(diagnostics_view(self.link.remote if self.link else {}, ack_age), self.stop_latched)
+        self.safety_status.set("Sterowanie lotem wyłączone • brak ochrony przed ścianami\n" + "  |  ".join(report["alerts"][:3]))
+        if report["criticalBattery"]:
+            self.inputs_enabled.set(False)
+            self.neutral()
         age = f"{int((now - self.last_tx) * 1000)} ms" if self.last_tx else "--"
         if self.link and self.link.healthy:
             usb = self.link.remote.get("usb", {})
@@ -649,9 +704,12 @@ class Cockpit:
         self.draw_horizon()
         self.draw_flight_map()
         delay = max(15, round(1000 / max(20, min(50, int(self.config.get("updateRate", 40))))))
-        self.root.after(delay, self.tick)
+        self.tick_job = self.root.after(delay, self.tick)
 
     def close(self):
+        if self.tick_job is not None:
+            self.root.after_cancel(self.tick_job)
+            self.tick_job = None
         self.video.close()
         if self.dji_panel and not self.dji_panel.closed:
             self.dji_panel.close()
@@ -673,14 +731,14 @@ def main():
     if "--self-test" in sys.argv:
         root.withdraw()
         app = None
-        result = {"version": "V4-DJI-READONLY", "ok": False}
+        result = {"version": "V5-OPERATOR-READONLY", "ok": False}
         try:
             app = Cockpit(root)
             app.connect_selected(quiet=True)
             sample = app.reader.read() if app.reader else None
             result.update(ok=True, pygame=pygame.version.ver, sdl=list(pygame.get_sdl_version()),
                           g29Detected=sample is not None, rawAxes=sample.get("raw_axes", []) if sample else [],
-                          videoPlayer=str(app.video.executable()), protocolVersion=1, flightControl=False)
+                          videoPlayer=str(app.video.executable()), protocolVersion=2, flightControl=False, collisionAvoidance=False)
         except Exception as exc:
             result["error"] = str(exc)
         finally:

@@ -13,6 +13,7 @@ from windows.control_mapping import PROFILES, map_state
 from windows.driver import axis_value
 from windows.simulator import FlightModel
 from windows.video_link import ScreenViewer
+from windows.signed_frames import VERSION, encode_signed, decode_signed
 from pathlib import Path
 
 
@@ -83,18 +84,22 @@ class BridgeTests(unittest.TestCase):
         self.peer = socket.create_connection(self.server.server.getsockname(), timeout=1)
         self.peer.settimeout(1)
         self.assertTrue(self.server.accept_once())
+        self.nonce = "b" * 32
+        self.peer.sendall(encode_signed({"version": VERSION, "type": "hello", "clientNonce": self.nonce}, self.server.pairing_token))
+        self.server.poll()
 
     def tearDown(self):
         self.peer.close(); self.server.close()
 
     def send(self, seq=1):
         self.assertTrue(self.server.send({"seq": seq, "output": dict.fromkeys(("yaw", "pitch", "roll", "vertical"), 0.0), "heartbeat": True}))
-        packet = json.loads(self.peer.recv(8192))
+        packet = decode_signed(self.peer.recv(8192), self.server.pairing_token)
         self.assertFalse(packet["inputConnected"])
         return packet
 
     def ack(self, seq=1, session=None):
-        return (json.dumps({"version": 1, "type": "ack", "seq": seq, "sessionId": session or self.server.session, "mode": "MOCK_ONLY"}) + "\n").encode()
+        return encode_signed({"version": VERSION, "type": "ack", "seq": seq, "clientNonce": self.nonce,
+                              "sessionId": session or self.server.session, "mode": "MOCK_ONLY", "flightControl": False}, self.server.pairing_token)
 
     def test_handshake_and_ack(self):
         self.assertFalse(self.server.healthy); self.send()
@@ -152,25 +157,29 @@ class CockpitTests(unittest.TestCase):
         class Device:
             def quit(self): pass
         app.reader = Reader(); app.device = Device()
+        app.inputs_enabled.set(True)
         app.link = JsonLineServer(port=0); app.link.start()
         peer = socket.create_connection(app.link.server.getsockname(), timeout=1)
+        nonce = "b" * 32
+        peer.sendall(encode_signed({"version": VERSION, "type": "hello", "clientNonce": nonce}, app.link.pairing_token))
         try:
-            app.tick(); first = json.loads(peer.recv(8192))
+            app.tick(); first = decode_signed(peer.recv(8192), app.link.pairing_token)
             self.assertIn("A0=+1.000", app.raw_status.get())
             self.assertGreater(app.output["yaw"], 0)
             self.assertEqual(first["output"]["yaw"], 0)  # no ACK yet
-            ack = {"version": 1, "type": "ack", "seq": first["seq"], "sessionId": first["sessionId"], "mode": "MOCK_ONLY", "usb": {}}
-            peer.sendall((json.dumps(ack) + "\n").encode())
-            app.tick(); active = json.loads(peer.recv(8192))
+            ack = {"version": VERSION, "type": "ack", "seq": first["seq"], "sessionId": first["sessionId"], "clientNonce": nonce, "mode": "MOCK_ONLY", "usb": {}, "flightControl": False}
+            peer.sendall(encode_signed(ack, app.link.pairing_token))
+            app.tick(); active = decode_signed(peer.recv(8192), app.link.pairing_token)
             self.assertGreater(active["output"]["yaw"], 0)
-            app.stop(); last = json.loads(peer.recv(8192))
+            token = app.link.pairing_token
+            app.stop(); last = decode_signed(peer.recv(8192), token)
             self.assertEqual(last["output"]["yaw"], 0); self.assertTrue(last["emergency"])
             self.assertTrue(app.stop_latched); self.assertIsNone(app.reader)
             app.tick(); self.assertEqual(app.output["yaw"], 0)
         finally:
             peer.close()
             if app.link: app.link.close()
-            root.destroy()
+            app.close()
 
 
 if __name__ == "__main__": unittest.main()

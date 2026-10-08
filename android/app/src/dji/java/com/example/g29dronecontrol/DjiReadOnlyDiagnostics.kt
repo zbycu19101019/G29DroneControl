@@ -1,6 +1,7 @@
 package com.example.g29dronecontrol
 
 import android.content.Context
+import android.hardware.usb.UsbManager
 import android.os.SystemClock
 import dji.common.error.DJIError
 import dji.common.error.DJISDKError
@@ -15,13 +16,17 @@ import org.json.JSONObject
 import java.util.concurrent.Executors
 
 /** Real official SDK integration, deliberately NO flight/camera/configuration setters. */
-class DjiReadOnlyDiagnostics : SdkDiagnostics {
+class DjiReadOnlyDiagnostics(context: Context) : SdkDiagnostics {
     override val enabled = true
     private val gate = Any()
     private val worker = Executors.newSingleThreadExecutor()
+    private val app = context.applicationContext
+    private val usbPermission = UsbAccessoryPermission(app)
     private var registering = false
     private var registered = false
     private var reading = false
+    private var connecting = false
+    private var connectionEpoch = 0L
     private var generation = 0L
     private var flight: FlightController? = null
     private var battery: Battery? = null
@@ -85,11 +90,52 @@ class DjiReadOnlyDiagnostics : SdkDiagnostics {
             if (!registered) {
                 SdkState.update { it.copy(error = "Najpierw zarejestruj SDK.") }; return
             }
-            if (reading) return
-            reading = true; generation++
-            SdkState.update { it.copy(connection = "READ_ONLY", error = "") }
+            if (reading || connecting) return
+            connecting = true
+            val epoch = ++connectionEpoch
+            SdkState.update { it.copy(connection = "WAITING_USB_PERMISSION", usbPermission = "WAITING",
+                error = "", productConnected = false, rcConnected = false,
+                flightControllerConnected = false, lastFlightAt = 0, lastBatteryAt = 0,
+                flightJson = "{}", batteryJson = "{}") }
+            usbPermission.request { result ->
+                synchronized(gate) {
+                    if (!connecting || epoch != connectionEpoch) return@request
+                    SdkState.update { it.copy(usbPermission = result.status, error = result.message) }
+                    if (!result.granted) {
+                        connecting = false
+                        SdkState.update { it.copy(connection = "STOPPED") }
+                        return@request
+                    }
+                    worker.execute { startReadOnly(epoch) }
+                }
+            }
+        }
+    }
+
+    private fun startReadOnly(epoch: Long) {
+        synchronized(gate) {
+            if (!connecting || epoch != connectionEpoch) return
             try {
-                check(DJISDKManager.getInstance().startConnectionToProduct()) { "SDK odrzuciło połączenie produktu" }
+                // Re-check immediately before handing USB to the unmodified SDK.
+                val usb = app.getSystemService(Context.USB_SERVICE) as UsbManager
+                val pilot = usb.accessoryList?.singleOrNull {
+                    UsbAccessoryPermission.isPilot(it.manufacturer, it.model)
+                }
+                if (pilot == null || !usb.hasPermission(pilot)) {
+                    connecting = false
+                    SdkState.update { it.copy(connection = "STOPPED", usbPermission = "REVOKED",
+                        error = "Pilot odłączony lub zgoda USB cofnięta. Ponów ODCZYT.") }
+                    return
+                }
+                connecting = false
+                reading = true; generation++
+                SdkState.update { it.copy(connection = "CONNECTING", error = "") }
+                if (!DJISDKManager.getInstance().startConnectionToProduct()) {
+                    stop()
+                    SdkState.update { it.copy(error = ConnectionMessages.sdkStartRejectedAfterUsbGrant()) }
+                    return
+                }
+                SdkState.update { it.copy(connection = "READ_ONLY") }
                 observe(DJISDKManager.getInstance().product)
             } catch (error: Throwable) { stop(); fail(error) }
         }
@@ -129,9 +175,7 @@ class DjiReadOnlyDiagnostics : SdkDiagnostics {
                             value.attitude?.let { number("pitch", it.pitch); number("roll", it.roll); number("yaw", it.yaw) }
                             value.aircraftLocation?.let {
                                 number("altitudeM", it.altitude.toDouble())
-                                if (value.satelliteCount >= 4 && it.latitude in -90.0..90.0 && it.longitude in -180.0..180.0) {
-                                    number("latitude", it.latitude); number("longitude", it.longitude)
-                                }
+                                // Do not export precise GPS coordinates by default.
                             }
                             number("velocityXMps", value.velocityX.toDouble())
                             number("velocityYMps", value.velocityY.toDouble())
@@ -160,9 +204,11 @@ class DjiReadOnlyDiagnostics : SdkDiagnostics {
     override fun stop() {
         synchronized(gate) {
             val wasReading = reading
+            connecting = false; connectionEpoch++
+            usbPermission.cancel()
             reading = false; clearCallbacks()
             if (wasReading) runCatching { DJISDKManager.getInstance().stopConnectionToProduct() }.onFailure { fail(it) }
-            SdkState.update { it.copy(connection = "STOPPED", productConnected = false,
+            SdkState.update { it.copy(connection = "STOPPED", usbPermission = if (it.usbPermission == "WAITING") "CANCELLED" else it.usbPermission, productConnected = false,
                 rcConnected = false, flightControllerConnected = false,
                 lastFlightAt = 0, lastBatteryAt = 0, flightJson = "{}", batteryJson = "{}") }
         }

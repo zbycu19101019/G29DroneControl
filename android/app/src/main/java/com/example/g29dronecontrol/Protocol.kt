@@ -4,11 +4,12 @@ import org.json.JSONObject
 
 /** Versioned bench protocol. Never implies that an aircraft accepted a command. */
 data class ControlPacket(val session: String, val seq: Long, val active: Boolean,
-    val yaw: Float, val pitch: Float, val roll: Float, val vertical: Float) {
+    val yaw: Float, val pitch: Float, val roll: Float, val vertical: Float, val emergency: Boolean = false) {
     companion object {
-        fun parse(line: String): ControlPacket {
+        fun parse(line: String, expectedNonce: String): ControlPacket {
             val o = JSONObject(line)
-            require(o.get("version") == 1 && o.getString("type") == "control")
+            require(o.get("version") == SignedFrames.VERSION && o.getString("type") == "control")
+            require(o.get("clientNonce") is String && o.getString("clientNonce") == expectedNonce)
             val session = o.getString("sessionId")
             require(session.matches(Regex("[a-f0-9]{32}")))
             val sequence = o.get("seq")
@@ -25,8 +26,10 @@ data class ControlPacket(val session: String, val seq: Long, val active: Boolean
                 require(value.isFinite() && value in -1.0..1.0)
                 return value.toFloat()
             }
-            return ControlPacket(session, seq, o.getBoolean("inputConnected") && !o.getBoolean("emergency"),
-                channel("yaw"), channel("pitch"), channel("roll"), channel("vertical"))
+            val active = o.getBoolean("inputConnected") && !o.getBoolean("emergency")
+            val yaw = channel("yaw"); val pitch = channel("pitch"); val roll = channel("roll"); val vertical = channel("vertical")
+            require(active || listOf(yaw, pitch, roll, vertical).all { it == 0f }) { "Nieaktywny pakiet musi mieć kanały zero" }
+            return ControlPacket(session, seq, active, yaw, pitch, roll, vertical, o.getBoolean("emergency"))
         }
     }
 }

@@ -14,10 +14,10 @@ def diagnostics_view(remote: dict, ack_age_ms: float) -> dict:
         dji = {}
     result = {key: dji.get(key, "--") for key in (
         "registration", "connection", "model", "productConnected", "rcConnected",
-        "flightControllerConnected", "telemetryAgeMs", "batteryAgeMs", "error")}
+        "flightControllerConnected", "telemetryAgeMs", "batteryAgeMs", "usbPermission", "error")}
     link_live = math.isfinite(ack_age_ms) and 0 <= ack_age_ms < 300
     age = dji.get("telemetryAgeMs")
-    fresh = (link_live and dji.get("telemetryFresh") is True
+    fresh = (link_live and dji.get("connection") == "READ_ONLY" and dji.get("telemetryFresh") is True
              and dji.get("productConnected") is True
              and dji.get("flightControllerConnected") is True
              and isinstance(age, (int, float)) and not isinstance(age, bool)
@@ -41,7 +41,7 @@ def diagnostics_view(remote: dict, ack_age_ms: float) -> dict:
                   validation="ODCZYT SDK — NIEZWERYFIKOWANY NA TYM DRONIE")
     battery_age = dji.get("batteryAgeMs")
     battery = dji.get("battery")
-    battery_fresh = (link_live and dji.get("batteryFresh") is True and isinstance(battery, dict)
+    battery_fresh = (link_live and dji.get("connection") == "READ_ONLY" and dji.get("productConnected") is True and dji.get("batteryFresh") is True and isinstance(battery, dict)
                      and battery.get("source") == "DJI_MSDK_BATTERY_CALLBACK"
                      and isinstance(battery_age, (int, float)) and not isinstance(battery_age, bool)
                      and math.isfinite(battery_age) and battery_age >= 0 and battery_age + ack_age_ms <= 3000)
@@ -64,18 +64,18 @@ class DjiTelemetryPanel:
         self.window = tk.Toplevel(owner.root)
         self.window.title("DJI SDK / DIAGNOSTYKA — TYLKO ODCZYT")
         self.window.geometry("740x620")
-        self.window.configure(bg="#070c10")
-        tk.Label(self.window, text="DJI / SDK READ ONLY", font=("Consolas", 20, "bold"),
-                 bg="#070c10", fg="#00e6c1").pack(anchor="w", padx=18, pady=14)
+        self.window.configure(bg="#f2f5f9")
+        tk.Label(self.window, text="DJI / SDK READ ONLY", font=("Segoe UI", 20, "bold"),
+                 bg="#f2f5f9", fg="#2563eb").pack(anchor="w", padx=18, pady=14)
         tk.Label(self.window, text="Mini 2 SE: brak oficjalnego wsparcia. Sterowanie lotem ZABLOKOWANE.\n"
                  "Rejestrację i odczyt włącz ręcznie w APK DJI na telefonie.\n"
                  "Test: dron na ziemi, bez śmigieł; zamknij DJI Fly przed odczytem.\n"
                  "Horyzont i mapa głównego okna nadal pokazują WYŁĄCZNIE SYMULACJĘ.",
-                 justify="left", wraplength=700, bg="#070c10", fg="#ffb347").pack(fill="x", padx=18)
+                 justify="left", wraplength=700, bg="#f2f5f9", fg="#a16207").pack(fill="x", padx=18)
         self.status = tk.StringVar()
-        tk.Label(self.window, textvariable=self.status, font=("Consolas", 12), bg="#070c10", fg="#e3f9f5",
+        tk.Label(self.window, textvariable=self.status, font=("Segoe UI", 12), bg="#f2f5f9", fg="#142335",
                  anchor="w").pack(fill="x", padx=18, pady=12)
-        self.text = tk.Text(self.window, bg="#05090c", fg="#00e6c1", font=("Consolas", 10),
+        self.text = tk.Text(self.window, bg="#f8fafc", fg="#2563eb", font=("Segoe UI", 10),
                             wrap="word", state="disabled")
         self.text.pack(fill="both", expand=True, padx=18, pady=(0, 18))
         self.window.protocol("WM_DELETE_WINDOW", self.close)
@@ -98,8 +98,9 @@ class DjiTelemetryPanel:
         self.text.delete("1.0", "end")
         self.text.insert("1.0", json.dumps(value, ensure_ascii=False, indent=2))
         self.text.configure(state="disabled")
-        self.window.after(200, self.poll)
+        self.poll_job = self.window.after(200, self.poll)
 
     def close(self):
         self.closed = True
+        self.window.after_cancel(self.poll_job)
         self.window.destroy()
